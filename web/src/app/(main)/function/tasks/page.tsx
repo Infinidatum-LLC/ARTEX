@@ -42,6 +42,7 @@ import {
   Trash2Icon,
   Undo2Icon,
   XIcon,
+  ZapIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -66,6 +67,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Combobox,
   ComboboxChip,
@@ -907,7 +916,7 @@ export default function TasksPage() {
                 onChanged={refreshCategoriesAndTasks}
                 onTaskMoved={applyTaskCategoryMove}
               />
-              <CreateTaskSheet
+              <NewTaskControl
                 tasks={tasks}
                 categories={categories}
                 onCreated={refreshCategoriesAndTasks}
@@ -3063,7 +3072,13 @@ function CategoryManagementSheet({
   );
 }
 
-function CreateTaskSheet({
+// NewTaskControl is the "New task" button plus its right-click menu. Left-click still
+// opens the full drawer (CreateTaskSheet), so nothing regresses. Right-click offers
+// "Quick start" — a two-field dialog (description + goal) that creates a task with every
+// other option left at its default — and "All options…", which opens the full drawer.
+// This is the answer to "too many configurations": the fast path needs only the two
+// fields the backend actually requires.
+function NewTaskControl({
   tasks,
   categories,
   onCreated,
@@ -3074,7 +3089,173 @@ function CreateTaskSheet({
   onCreated: () => void;
   onCategoriesChanged: () => void;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [quickOpen, setQuickOpen] = React.useState(false);
+
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <Button
+            size="sm"
+            onClick={() => setSheetOpen(true)}
+            title="Click for all options · Right-click to quick start"
+          >
+            <PlusIcon /> New task
+          </Button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-52">
+          <ContextMenuLabel>Start a task</ContextMenuLabel>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => setQuickOpen(true)}>
+            <ZapIcon className="text-primary" />
+            Quick start
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => setSheetOpen(true)}>
+            <SlidersHorizontalIcon />
+            All options…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
+      <QuickStartTaskDialog open={quickOpen} onOpenChange={setQuickOpen} onCreated={onCreated} />
+
+      <CreateTaskSheet
+        tasks={tasks}
+        categories={categories}
+        onCreated={onCreated}
+        onCategoriesChanged={onCategoriesChanged}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        hideTrigger
+      />
+    </>
+  );
+}
+
+// QuickStartTaskDialog is the fast path: description + goal only, everything else defaulted
+// by the backend (coverage on, no timeout, default planner heartbeat). Submit with the
+// button or ⌘/Ctrl+Enter.
+function QuickStartTaskDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: () => void;
+}) {
+  const [description, setDescription] = React.useState("");
+  const [goal, setGoal] = React.useState("");
+  const [creating, setCreating] = React.useState(false);
+
+  // Clear the fields whenever the dialog is reopened, so a quick start always begins blank.
+  React.useEffect(() => {
+    if (open) {
+      setDescription("");
+      setGoal("");
+    }
+  }, [open]);
+
+  async function start() {
+    if (!description.trim() || !goal.trim()) {
+      toast.error("Please fill in the target and goal");
+      return;
+    }
+    setCreating(true);
+    try {
+      await api.createTask({ description: description.trim(), goal: goal.trim() });
+      toast.success("Task created");
+      onOpenChange(false);
+      onCreated();
+    } catch (e) {
+      toast.error("Create failed: " + (e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      void start();
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ZapIcon className="text-primary size-4" /> Quick start a task
+          </DialogTitle>
+          <DialogDescription>
+            Just the target and the goal — everything else uses sensible defaults. Use "All options…" for the full
+            configuration.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-1">
+          <div className="grid gap-2">
+            <Label htmlFor="quick-description">Target / description</Label>
+            <Textarea
+              id="quick-description"
+              autoFocus
+              placeholder="e.g. Penetration test of https://staging.example.com"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              onKeyDown={onKeyDown}
+              className="min-h-20"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="quick-goal">Goal</Label>
+            <Textarea
+              id="quick-goal"
+              placeholder="e.g. Find and confirm exploitable vulnerabilities; report with reproduction steps"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              onKeyDown={onKeyDown}
+              className="min-h-20"
+            />
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <DialogClose asChild>
+            <Button variant="outline">Cancel</Button>
+          </DialogClose>
+          <Button onClick={start} disabled={creating}>
+            {creating ? <Spinner data-icon="inline-start" /> : <ZapIcon data-icon="inline-start" />}
+            {creating ? "Starting" : "Start task"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateTaskSheet({
+  tasks,
+  categories,
+  onCreated,
+  onCategoriesChanged,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false,
+}: {
+  tasks: Task[];
+  categories: TaskCategory[];
+  onCreated: () => void;
+  onCategoriesChanged: () => void;
+  // When open/onOpenChange are supplied the sheet is controlled by the parent
+  // (used by NewTaskControl so the right-click menu can open it). hideTrigger
+  // then drops the built-in "New task" button, since the parent renders its own.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
+}) {
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [name, setName] = React.useState("");
   const [categoryID, setCategoryID] = React.useState<number | undefined>(undefined);
   const [description, setDescription] = React.useState("");
@@ -3195,11 +3376,13 @@ function CreateTaskSheet({
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
-        <Button size="sm">
-          <PlusIcon /> New task
-        </Button>
-      </SheetTrigger>
+      {!hideTrigger && (
+        <SheetTrigger asChild>
+          <Button size="sm">
+            <PlusIcon /> New task
+          </Button>
+        </SheetTrigger>
+      )}
       {/* A 45vw-wide right drawer: full-height and scrollable, so long forms are no longer bound by dialog height. Narrow screens fall back to full width.
             The content is a flex column: header/footer fixed, the middle field area flex-1 scrolling independently. */}
       <SheetContent

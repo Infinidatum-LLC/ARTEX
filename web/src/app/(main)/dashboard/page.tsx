@@ -14,7 +14,18 @@ import {
   TargetIcon,
   ZapIcon,
 } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Label,
+  Pie,
+  PieChart,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +59,36 @@ const dailyTrendConfig = {
   input: { label: "Input", color: "hsl(217 91% 60%)" },
   output: { label: "Output", color: "hsl(263 70% 60%)" },
   cacheRead: { label: "Cache read", color: "hsl(160 60% 45%)" },
+} satisfies ChartConfig;
+
+// Severity donut — colors match the inline severity text used elsewhere on the page.
+const SEV_META: { key: "critical" | "high" | "medium" | "low"; label: string; color: string }[] = [
+  { key: "critical", label: "Critical", color: "hsl(351 83% 61%)" },
+  { key: "high", label: "High", color: "hsl(0 84% 68%)" },
+  { key: "medium", label: "Medium", color: "hsl(43 96% 56%)" },
+  { key: "low", label: "Low", color: "hsl(215 20% 65%)" },
+];
+
+const sevConfig = {
+  critical: { label: "Critical", color: SEV_META[0].color },
+  high: { label: "High", color: SEV_META[1].color },
+  medium: { label: "Medium", color: SEV_META[2].color },
+  low: { label: "Low", color: SEV_META[3].color },
+} satisfies ChartConfig;
+
+// Task-status bars — brand teal/navy palette from the theme chart tokens.
+const TASK_STATUS_META: { key: string; label: string; color: string }[] = [
+  { key: "running", label: "Running", color: "var(--chart-1)" },
+  { key: "queued", label: "Queued", color: "var(--chart-3)" },
+  { key: "paused", label: "Paused", color: "var(--chart-4)" },
+  { key: "done", label: "Done", color: "var(--chart-2)" },
+  { key: "created", label: "Created", color: "var(--chart-5)" },
+  { key: "failed", label: "Failed", color: "hsl(0 72% 51%)" },
+  { key: "timeout", label: "Timeout", color: "hsl(25 90% 55%)" },
+];
+
+const taskStatusConfig = {
+  count: { label: "Tasks" },
 } satisfies ChartConfig;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -270,6 +311,21 @@ export default function DashboardPage() {
     }
     return m;
   }, [findings]);
+
+  // Severity donut slices (drop zero-count severities so the ring stays clean).
+  const sevChartData = React.useMemo(
+    () => SEV_META.map((s) => ({ key: s.key, label: s.label, value: findingsBySev[s.key], fill: s.color })).filter((d) => d.value > 0),
+    [findingsBySev],
+  );
+
+  // Task-status bars, in lifecycle order, only for statuses that are present.
+  const taskStatusData = React.useMemo(
+    () =>
+      TASK_STATUS_META.map((s) => ({ label: s.label, count: tasksByStatus[s.key] ?? 0, fill: s.color })).filter(
+        (d) => d.count > 0,
+      ),
+    [tasksByStatus],
+  );
 
   const sortedTasks = React.useMemo(
     () =>
@@ -844,6 +900,98 @@ export default function DashboardPage() {
           </div>
         </div>
       </Card>
+
+      {/* ── Row 2.5: Severity mix | Task status ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {/* Findings by severity — donut */}
+        <Card className="p-4">
+          <div className="mb-1 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-semibold">
+              <BugIcon className="size-3.5 text-muted-foreground" />
+              Findings by severity
+            </div>
+            <span className="text-[10px] text-muted-foreground">{findings.length} confirmed</span>
+          </div>
+
+          {sevChartData.length === 0 ? (
+            <div className="py-10 text-center text-xs text-muted-foreground">No findings yet</div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <ChartContainer config={sevConfig} className="h-[180px] min-w-0 flex-1">
+                <PieChart>
+                  <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="label" hideLabel />} />
+                  <Pie data={sevChartData} dataKey="value" nameKey="label" innerRadius={52} outerRadius={78} strokeWidth={2} paddingAngle={2}>
+                    {sevChartData.map((d) => (
+                      <Cell key={d.key} fill={d.fill} />
+                    ))}
+                    <Label
+                      content={({ viewBox }) => {
+                        if (!viewBox || !("cx" in viewBox)) return null;
+                        const { cx, cy } = viewBox as { cx: number; cy: number };
+                        return (
+                          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
+                            <tspan x={cx} y={cy} className="fill-foreground text-2xl font-semibold tabular-nums">
+                              {findings.length}
+                            </tspan>
+                            <tspan x={cx} y={cy + 18} className="fill-muted-foreground text-[10px]">
+                              findings
+                            </tspan>
+                          </text>
+                        );
+                      }}
+                    />
+                  </Pie>
+                </PieChart>
+              </ChartContainer>
+              <div className="flex shrink-0 flex-col gap-1.5">
+                {SEV_META.map((s) => (
+                  <div key={s.key} className="flex items-center gap-1.5 text-[11px]">
+                    <span className="size-2.5 rounded-sm" style={{ background: s.color }} />
+                    <span className="text-muted-foreground">{s.label}</span>
+                    <span className="ml-auto tabular-nums font-medium">{findingsBySev[s.key]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {/* Tasks by status — bars */}
+        <Card className="p-4">
+          <div className="mb-1 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-semibold">
+              <TargetIcon className="size-3.5 text-muted-foreground" />
+              Tasks by status
+            </div>
+            <span className="text-[10px] text-muted-foreground">{tasks.length} tasks</span>
+          </div>
+
+          {taskStatusData.length === 0 ? (
+            <div className="py-10 text-center text-xs text-muted-foreground">No tasks yet</div>
+          ) : (
+            <ChartContainer config={taskStatusConfig} className="h-[180px] w-full">
+              <BarChart data={taskStatusData} layout="vertical" margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/50" />
+                <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  width={64}
+                  fontSize={11}
+                />
+                <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+                <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={26}>
+                  {taskStatusData.map((d, i) => (
+                    <Cell key={i} fill={d.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          )}
+        </Card>
+      </div>
 
       {/* ── Row 3: Activity feed | Findings ── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

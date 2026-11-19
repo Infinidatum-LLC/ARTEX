@@ -66,3 +66,6 @@ posture-runs/
 
 # benchmark runner output (one dir per run)
 benchmark-results/
+
+# local admin creds (never commit)
+ADMIN_CREDENTIALS.txt

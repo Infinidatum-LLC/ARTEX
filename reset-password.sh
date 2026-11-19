@@ -166,6 +166,19 @@ if [[ "$MODE" == "local" ]]; then
 
   command -v psql >/dev/null 2>&1 || die "psql not found on this machine (install postgresql-client, or use -m docker instead)"
 
+  # The SQL above uses \getenv, which the Homebrew default psql on this Mac rejects.
+  # Prefer the newest installed Homebrew Postgres keg's psql (a newer client talks to
+  # any older server fine); otherwise use whatever psql is on PATH. No global changes.
+  PSQL_BIN="psql"
+  for cand in \
+    /opt/homebrew/opt/postgresql@18/bin/psql \
+    /opt/homebrew/opt/postgresql@17/bin/psql \
+    /opt/homebrew/opt/postgresql@16/bin/psql \
+    /opt/homebrew/opt/postgresql@15/bin/psql; do
+    if [[ -x "$cand" ]]; then PSQL_BIN="$cand"; break; fi
+  done
+  info "using psql: $PSQL_BIN"
+
   declare -a PSQL_ARGS=()
   if [[ -n "$DSN" ]]; then
     PSQL_ARGS=("$DSN")
@@ -186,7 +199,7 @@ if [[ "$MODE" == "local" ]]; then
     [[ "$ans" == "y" || "$ans" == "Y" ]] || die "cancelled"
   fi
 
-  if ! printf '%s\n' "$SQL" | psql "${PSQL_ARGS[@]}" -v ON_ERROR_STOP=1 -q >/dev/null; then
+  if ! printf '%s\n' "$SQL" | "$PSQL_BIN" "${PSQL_ARGS[@]}" -v ON_ERROR_STOP=1 -q >/dev/null; then
     die "write failed. If it reports a pgcrypto permission/missing error, use a role allowed to create extensions, or run CREATE EXTENSION pgcrypto manually first."
   fi
 

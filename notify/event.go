@@ -63,8 +63,27 @@ func (i Item) Title() string {
 	return "(unnamed vulnerability)"
 }
 
+// Notice is a non-finding informational message — a task-completion alert, for
+// example. When a Message carries a Notice, every channel renders the Notice
+// instead of the finding Items: the finding pipeline (deliveries, digest, rate
+// limiting) is finding-centric and keyed on finding_id, so lifecycle alerts take
+// this separate, finding-free path. Title is the headline; Lines are plain-text
+// body lines (each channel escapes them for its own format); URL is an optional
+// backlink to the platform.
+type Notice struct {
+	Title string
+	Lines []string
+	URL   string
+}
+
+// hasNotice reports whether the message is a notice (vs. a finding push).
+func (m Message) hasNotice() bool { return m.Notice != nil }
+
 // Message is the complete content of one channel send.
 type Message struct {
+	// Notice, when non-nil, makes this a non-finding informational message; the
+	// finding fields below are then ignored. See Notice.
+	Notice *Notice
 	// Length is 1 for a single push; a whole batch for a digest push.
 	// An empty slice is illegal; callers must guarantee at least one item.
 	Items []Item

@@ -61,6 +61,17 @@ const webhookDefaultTemplate = `{
   ]
 }`
 
+// webhookNoticeDefaultTemplate is the fallback body for a finding-free notice
+// (e.g. a task-completion alert). It is a different shape from the finding
+// template: no items array, a "notice" flag, and the headline/body/backlink.
+const webhookNoticeDefaultTemplate = `{
+  "title": {{json .Title}},
+  "notice": true,
+  "lines": {{json .NoticeLines}},
+  "url": {{json .NoticeURL}},
+  "sent_at": {{json .SentAt}}
+}`
+
 // webhookTemplateData is the context exposed to user templates.
 type webhookTemplateData struct {
 	Title   string
@@ -68,6 +79,12 @@ type webhookTemplateData struct {
 	Count   int
 	Items   []webhookItem
 	HomeURL string
+	// Notice is true when this is a finding-free informational message; NoticeLines
+	// and NoticeURL carry its body and backlink. For a finding push Notice is false
+	// and the two are empty.
+	Notice      bool
+	NoticeLines []string
+	NoticeURL   string
 	// SentAt is the delivery time of this send (RFC3339), for the receiving end
 	// to record.
 	SentAt string
@@ -147,9 +164,12 @@ func (c webhookChannel) Send(ctx context.Context, cfg map[string]any, m Message)
 	if _, err := doJSON(ctx, method, cfgString(cfg, "url"), headers, payload); err != nil {
 		return 0, err
 	}
-	// Generic webhooks do not truncate the body (the receiver is the user's own
-	// service and the size is governed by body_template), so the whole batch
-	// counts as delivered.
+	// A notice delivers as a single message; a finding push is not truncated (the
+	// receiver is the user's own service, sized by body_template), so the whole
+	// batch counts as delivered.
+	if m.hasNotice() {
+		return 1, nil
+	}
 	return len(m.Items), nil
 }
 
@@ -157,7 +177,11 @@ func (c webhookChannel) Send(ctx context.Context, cfg map[string]any, m Message)
 // default template).
 func renderWebhookBody(tpl string, m Message) (string, error) {
 	if strings.TrimSpace(tpl) == "" {
-		tpl = webhookDefaultTemplate
+		if m.hasNotice() {
+			tpl = webhookNoticeDefaultTemplate
+		} else {
+			tpl = webhookDefaultTemplate
+		}
 	}
 	t, err := parseWebhookTemplate(tpl)
 	if err != nil {
@@ -220,6 +244,11 @@ func newWebhookTemplateData(m Message) webhookTemplateData {
 		HomeURL: m.HomeURL,
 		SentAt:  time.Now().Format(time.RFC3339),
 		Items:   make([]webhookItem, 0, len(m.Items)),
+	}
+	if m.hasNotice() {
+		d.Notice = true
+		d.NoticeLines = append([]string{}, m.Notice.Lines...)
+		d.NoticeURL = m.Notice.URL
 	}
 	for _, it := range m.Items {
 		wi := webhookItem{

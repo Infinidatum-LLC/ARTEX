@@ -36,6 +36,24 @@ func htmlTitle(m Message) string {
 func htmlBody(m Message, maxRunes int) string {
 	var b strings.Builder
 	b.WriteString(`<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:14px;color:#262626;line-height:1.6;">`)
+	if m.hasNotice() {
+		// A notice is a finding-free informational message. The subject carries
+		// the headline (markdownTitle); here the title is repeated as a heading
+		// and each body line is rendered as its own escaped paragraph.
+		if m.Notice.Title != "" {
+			fmt.Fprintf(&b, `<h2 style="font-size:16px;margin:0 0 8px;">%s</h2>`, htmlEscape(m.Notice.Title))
+		}
+		for _, line := range m.Notice.Lines {
+			if strings.TrimSpace(line) != "" {
+				fmt.Fprintf(&b, `<p style="margin:0 0 6px;">%s</p>`, htmlEscape(line))
+			}
+		}
+		if m.Notice.URL != "" {
+			fmt.Fprintf(&b, `<p style="margin:12px 0 0;"><a href="%s" style="color:#1677ff;">View on the platform</a></p>`, htmlEscapeAttr(m.Notice.URL))
+		}
+		b.WriteString(`</div>`)
+		return TruncateHTML(b.String(), maxRunes)
+	}
 	if m.Batch {
 		b.WriteString(htmlBatchIntro(m))
 		for _, it := range m.Items {

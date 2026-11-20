@@ -118,6 +118,21 @@ func telegramHTML(m Message) (string, int) {
 	lim := m.limits()
 	var b strings.Builder
 	b.WriteString("<b>" + telegramEscape(markdownTitle(m)) + "</b>\n")
+	if m.hasNotice() {
+		// A notice is a finding-free informational message (e.g. a task-completion
+		// alert). The title is already written above; here only the body lines and
+		// the optional backlink are appended, each escaped as HTML text content.
+		for _, line := range m.Notice.Lines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			b.WriteString("\n" + telegramEscape(line))
+		}
+		if m.Notice.URL != "" {
+			b.WriteString(fmt.Sprintf("\n\n<a href=\"%s\">View on the platform</a>", telegramEscapeAttr(m.Notice.URL)))
+		}
+		return TruncateHTML(b.String(), telegramTextLimit), 1
+	}
 	if m.Batch {
 		// Telegram's limit is in **characters**, so packing is measured in
 		// characters too (runeSize).

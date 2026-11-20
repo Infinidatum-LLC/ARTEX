@@ -51,6 +51,7 @@ func (sc *Scheduler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			sc.s.reconcileConcurrency() // concurrency cap: start queued tasks as free slots appear
+			sc.fireScanSchedules()      // recurring scans: auto-create tasks on their interval
 			sc.step()
 		}
 	}

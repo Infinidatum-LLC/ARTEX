@@ -71,28 +71,76 @@ VALUES (NULLIF($1,''),$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$
 // Accurate even with per-agent model bindings, pool rotation/failover, and
 // interrupted runs, since every call (success or error) is metered.
 func (d *DB) TokenByModel(taskID string) ([]ModelTokenStat, error) {
+	// Group by (model, profile) so each subgroup can be priced with its own
+	// profile's rates, then merge up to one row per model. A model used through
+	// two profiles with different prices is costed correctly and still shown once.
 	rows, err := d.Query(`
-SELECT COALESCE(NULLIF(model,''),'(unknown)') AS model, COUNT(*) AS calls,
+SELECT COALESCE(NULLIF(model,''),'(unknown)') AS model, COALESCE(profile_name,'') AS profile_name,
+       COUNT(*) AS calls,
        COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
        COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0)
 FROM llm_usage
 WHERE COALESCE(task_id,'') = $1
-GROUP BY model
-ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC, model`, taskID)
+GROUP BY model, profile_name`, taskID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []ModelTokenStat{}
+	prices, err := d.profilePriceMap()
+	if err != nil {
+		return nil, err
+	}
+	type acc struct {
+		stat   ModelTokenStat
+		cost   float64
+		priced bool
+	}
+	byModel := map[string]*acc{}
+	order := []string{}
 	for rows.Next() {
-		var m ModelTokenStat
-		if err := rows.Scan(&m.Model, &m.Calls, &m.InputTokens, &m.OutputTokens,
-			&m.CacheReadTokens, &m.CacheWriteTokens); err != nil {
+		var model, profile string
+		var calls, in, out, cr, cw int
+		if err := rows.Scan(&model, &profile, &calls, &in, &out, &cr, &cw); err != nil {
 			return nil, err
 		}
-		out = append(out, m)
+		a := byModel[model]
+		if a == nil {
+			a = &acc{stat: ModelTokenStat{Model: model}}
+			byModel[model] = a
+			order = append(order, model)
+		}
+		a.stat.Calls += calls
+		a.stat.InputTokens += in
+		a.stat.OutputTokens += out
+		a.stat.CacheReadTokens += cr
+		a.stat.CacheWriteTokens += cw
+		if pr, ok := prices[profile]; ok && !pr.zero() {
+			a.cost += pr.cost(in, out, cr, cw)
+			a.priced = true
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]ModelTokenStat, 0, len(order))
+	for _, model := range order {
+		a := byModel[model]
+		if a.priced {
+			c := a.cost
+			a.stat.CostEur = &c
+		}
+		result = append(result, a.stat)
+	}
+	// Most-used model first (tokens), stable by name — matches the old ordering.
+	sort.Slice(result, func(i, j int) bool {
+		li := result[i].InputTokens + result[i].OutputTokens
+		lj := result[j].InputTokens + result[j].OutputTokens
+		if li != lj {
+			return li > lj
+		}
+		return result[i].Model < result[j].Model
+	})
+	return result, nil
 }
 
 // ProfileUsage aggregates the whole ledger's token spend for one LLM profile
@@ -184,6 +232,13 @@ type ProfileDayUsage struct {
 	InputTokens     int    `json:"input_tokens"`
 	OutputTokens    int    `json:"output_tokens"`
 	CacheReadTokens int    `json:"cache_read_tokens"`
+	// CostEur is the day's spend for this profile, set only when the profile
+	// carries at least one price; nil = not priced. It is an approximation of the
+	// authoritative per-profile total (UsageByProfile): the daily series does not
+	// track cache_write separately, so cache-write tokens are charged at the input
+	// price rather than their own. For a trend chart this is close enough; the
+	// headline total still comes from UsageByProfile.
+	CostEur *float64 `json:"cost_eur,omitempty"`
 }
 
 // UsageDaily returns per-(profile, day) token buckets for the past `days` days
@@ -242,6 +297,21 @@ ORDER BY day`, days)
 	out = out[:0]
 	for _, current := range byKey {
 		out = append(out, current)
+	}
+	// Price each day bucket. The daily series has no cache_write column, so pass 0
+	// for it (see ProfileDayUsage.CostEur): cache-write tokens are then billed at
+	// the input price. The authoritative total stays UsageByProfile.
+	prices, err := d.profilePriceMap()
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		pr, ok := prices[out[i].ProfileName]
+		if !ok || pr.zero() {
+			continue
+		}
+		c := pr.cost(out[i].InputTokens, out[i].OutputTokens, out[i].CacheReadTokens, 0)
+		out[i].CostEur = &c
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Date != out[j].Date {
@@ -326,51 +396,64 @@ func ParseExpID(s string) int64 {
 	return n
 }
 
-// applyCostEur fills CostEur on each profile bucket from the stored per-profile
-// prices (EUR per 1M tokens). Profiles without any price keep CostEur nil. The
-// join is by profile name (llm_usage records the name, not the id); the first
-// matching profile wins, and duplicate names are a configuration error the
-// operator sees as a weird number, not a crash.
-func applyCostEur(d *DB, out []ProfileUsage) error {
+// profilePrices is one profile's per-1M-token prices (EUR), shared by every cost
+// computation so the billing rule lives in exactly one place.
+type profilePrices struct{ in, outp, cr, cw float64 }
+
+// zero reports whether no price is set, so an un-priced profile yields a nil cost
+// rather than a misleading 0.00.
+func (p profilePrices) zero() bool { return p.in == 0 && p.outp == 0 && p.cr == 0 && p.cw == 0 }
+
+// cost prices one bucket of tokens. InputTokens already includes both cached
+// subsets: Norma normalizes it to input + cache read + cache write (OpenAI
+// prompt_tokens semantics). The fresh share is therefore input minus cache reads
+// minus cache writes; charging either subset at full input price as well bills it
+// twice. Clamped at zero for gateways that report the buckets disjointly.
+func (p profilePrices) cost(input, output, cacheRead, cacheWrite int) float64 {
+	fresh := input - cacheRead - cacheWrite
+	if fresh < 0 {
+		fresh = 0
+	}
+	return float64(fresh)/1e6*p.in + float64(output)/1e6*p.outp +
+		float64(cacheRead)/1e6*p.cr + float64(cacheWrite)/1e6*p.cw
+}
+
+// profilePriceMap loads the per-profile prices keyed by profile name. llm_usage
+// records the name, not the id; the first matching profile wins, and duplicate
+// names are a configuration error the operator sees as a weird number, not a crash.
+func (d *DB) profilePriceMap() (map[string]profilePrices, error) {
 	rows, err := d.Query(`SELECT name, COALESCE(price_input_per_m,0), COALESCE(price_output_per_m,0), COALESCE(price_cache_read_per_m,0), COALESCE(price_cache_write_per_m,0) FROM llm_profiles`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
-	type prices struct{ in, outp, cr, cw float64 }
-	byName := map[string]prices{}
-	seen := map[string]bool{}
+	byName := map[string]profilePrices{}
 	for rows.Next() {
 		var n string
-		var pr prices
+		var pr profilePrices
 		if err := rows.Scan(&n, &pr.in, &pr.outp, &pr.cr, &pr.cw); err != nil {
-			return err
+			return nil, err
 		}
-		if !seen[n] {
+		if _, seen := byName[n]; !seen {
 			byName[n] = pr
-			seen[n] = true
 		}
 	}
-	if err := rows.Err(); err != nil {
+	return byName, rows.Err()
+}
+
+// applyCostEur fills CostEur on each profile bucket from the stored per-profile
+// prices (EUR per 1M tokens). Profiles without any price keep CostEur nil.
+func applyCostEur(d *DB, out []ProfileUsage) error {
+	byName, err := d.profilePriceMap()
+	if err != nil {
 		return err
 	}
 	for i := range out {
 		pr, ok := byName[out[i].ProfileName]
-		if !ok || (pr.in == 0 && pr.outp == 0 && pr.cr == 0 && pr.cw == 0) {
+		if !ok || pr.zero() {
 			continue
 		}
-		// InputTokens already includes both cached subsets: Norma normalizes it to
-		// input + cache read + cache write (OpenAI prompt_tokens semantics). The
-		// fresh share is therefore input minus cache reads minus cache writes;
-		// charging either subset at full input price as well bills it twice.
-		// Clamped at zero for gateways that report the buckets disjointly.
-		fresh := out[i].InputTokens - out[i].CacheReadTokens - out[i].CacheWriteTokens
-		if fresh < 0 {
-			fresh = 0
-		}
-		cost := float64(fresh)/1e6*pr.in + float64(out[i].OutputTokens)/1e6*pr.outp +
-			float64(out[i].CacheReadTokens)/1e6*pr.cr + float64(out[i].CacheWriteTokens)/1e6*pr.cw
-		c := cost
+		c := pr.cost(out[i].InputTokens, out[i].OutputTokens, out[i].CacheReadTokens, out[i].CacheWriteTokens)
 		out[i].CostEur = &c
 	}
 	return nil

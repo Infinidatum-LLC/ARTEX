@@ -55,6 +55,14 @@ function cacheHitRate(cacheRead: number, input: number): string {
   return Math.round((cacheRead / input) * 100) + "%";
 }
 
+// Monetary cost formatting (EUR). Tiny spends keep more precision so a sub-cent run never reads as "€0.00".
+function fmtCost(n: number): string {
+  if (n <= 0) return "€0.00";
+  if (n < 0.01) return "€" + n.toFixed(4);
+  if (n < 1) return "€" + n.toFixed(3);
+  return "€" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Display value of one test-scope row: domain / CIDR / company.
 function scopeValue(row: TaskScopeRow): string {
   if (row.value) return row.value;
@@ -428,9 +436,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       acc.cacheRead += m.cache_read_tokens;
       acc.cacheWrite += m.cache_write_tokens;
       acc.calls += m.calls;
+      // Cost sums only the models whose profile(s) carry a price; priced flags whether any did,
+      // so an all-unpriced task shows no cost rather than a misleading €0.00.
+      if (m.cost_eur != null) {
+        acc.cost += m.cost_eur;
+        acc.priced = true;
+      }
       return acc;
     },
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 },
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0, priced: false },
   );
 
   return (
@@ -786,6 +800,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                     {cacheHitRate(tokenTotals.cacheRead, tokenTotals.input)}
                   </span>
                 </span>
+                {tokenTotals.priced && (
+                  <span className="tabular-nums" title="Total cost of this run, priced from the LLM profile(s) used">
+                    <span className="text-muted-foreground">Run cost </span>
+                    <span className="font-semibold text-amber-500">{fmtCost(tokenTotals.cost)}</span>
+                  </span>
+                )}
               </div>
               {/* Per-model detail table */}
               <div className="overflow-x-auto">
@@ -797,7 +817,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       <th className="py-1.5 pr-3 text-right font-medium">Input</th>
                       <th className="py-1.5 pr-3 text-right font-medium">Output</th>
                       <th className="py-1.5 pr-3 text-right font-medium">Cache read</th>
-                      <th className="py-1.5 text-right font-medium">Hit rate</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Hit rate</th>
+                      <th className="py-1.5 text-right font-medium">Cost</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -810,8 +831,14 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.input_tokens)}</td>
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.output_tokens)}</td>
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.cache_read_tokens)}</td>
-                        <td className="py-1.5 text-right tabular-nums text-emerald-500">
+                        <td className="py-1.5 pr-3 text-right tabular-nums text-emerald-500">
                           {cacheHitRate(m.cache_read_tokens, m.input_tokens)}
+                        </td>
+                        <td
+                          className="py-1.5 text-right tabular-nums text-amber-500"
+                          title={m.cost_eur == null ? "No price set for this model's profile" : undefined}
+                        >
+                          {m.cost_eur == null ? "—" : fmtCost(m.cost_eur)}
                         </td>
                       </tr>
                     ))}

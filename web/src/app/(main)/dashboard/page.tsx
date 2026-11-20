@@ -18,13 +18,13 @@ import {
   ZapIcon,
 } from "lucide-react";
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
   Label,
-  Line,
   Pie,
   PieChart,
   Tooltip as RechartsTooltip,
@@ -66,12 +66,15 @@ const dailyTrendConfig = {
   cacheRead: { label: "Cache read", color: "hsl(160 60% 45%)" },
 } satisfies ChartConfig;
 
-// Severity donut — colors match the inline severity text used elsewhere on the page.
+// Severity status ramp — distinct hues (red → orange → amber → slate) so adjacent
+// stacked segments stay separable for colorblind readers. The old palette used two
+// reds for critical/high (CVD-unsafe); these pass the dataviz CVD check (ΔE ≥ 8) and
+// are always paired with a text label (legend + inline counts), the required relief.
 const SEV_META: { key: "critical" | "high" | "medium" | "low"; label: string; color: string }[] = [
-  { key: "critical", label: "Critical", color: "hsl(351 83% 61%)" },
-  { key: "high", label: "High", color: "hsl(0 84% 68%)" },
-  { key: "medium", label: "Medium", color: "hsl(43 96% 56%)" },
-  { key: "low", label: "Low", color: "hsl(215 20% 65%)" },
+  { key: "critical", label: "Critical", color: "#dc2626" },
+  { key: "high", label: "High", color: "#f97316" },
+  { key: "medium", label: "Medium", color: "#eab308" },
+  { key: "low", label: "Low", color: "#64748b" },
 ];
 
 const sevConfig = {
@@ -101,13 +104,12 @@ const costTrendConfig = {
   cost: { label: "Cost", color: "hsl(43 96% 56%)" },
 } satisfies ChartConfig;
 
-// Findings-over-time — stacked severity bars + a cumulative line.
+// Findings-over-time — single-axis cumulative stacked area by severity (no dual axis).
 const findingsTrendConfig = {
   critical: { label: "Critical", color: SEV_META[0].color },
   high: { label: "High", color: SEV_META[1].color },
   medium: { label: "Medium", color: SEV_META[2].color },
   low: { label: "Low", color: SEV_META[3].color },
-  cumulative: { label: "Cumulative", color: "var(--chart-1)" },
 } satisfies ChartConfig;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -174,6 +176,64 @@ function statusBg(code: number): string {
 
 function LiveDot({ className }: { className?: string }) {
   return <span className={cn("inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-blue-400", className)} />;
+}
+
+// Inline-SVG sparkline — a glanceable 14-day trajectory for a KPI number (Tufte
+// sparkline / Few glanceable-KPI: a number means more beside its recent trend).
+// A filled area carries the shape; a dot marks the latest value. Decorative only,
+// so it is aria-hidden and the KPI number remains the accessible value.
+function Sparkline({
+  data,
+  color,
+  className,
+  width = 72,
+  height = 28,
+}: {
+  data: number[];
+  color: string;
+  className?: string;
+  width?: number;
+  height?: number;
+}) {
+  const gid = React.useId();
+  if (data.length < 2 || data.every((d) => d === 0)) return null;
+  const pad = 2;
+  const max = Math.max(...data);
+  const min = Math.min(...data);
+  const span = max - min || 1;
+  const stepX = (width - pad * 2) / (data.length - 1);
+  const y = (v: number) => height - pad - ((v - min) / span) * (height - pad * 2);
+  const pts = data.map((v, i) => [pad + i * stepX, y(v)] as const);
+  const line = pts.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
+  const area = `${pad},${height} ${line} ${(width - pad).toFixed(1)},${height}`;
+  const [lastX, lastY] = pts[pts.length - 1];
+  return (
+    <svg
+      className={cn("shrink-0", className)}
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      role="presentation"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.22} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <polygon points={area} fill={`url(#${gid})`} />
+      <polyline
+        points={line}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={lastX} cy={lastY} r={2} fill={color} />
+    </svg>
+  );
 }
 
 function SectionTitle({
@@ -341,7 +401,10 @@ export default function DashboardPage() {
 
   // Severity donut slices (drop zero-count severities so the ring stays clean).
   const sevChartData = React.useMemo(
-    () => SEV_META.map((s) => ({ key: s.key, label: s.label, value: findingsBySev[s.key], fill: s.color })).filter((d) => d.value > 0),
+    () =>
+      SEV_META.map((s) => ({ key: s.key, label: s.label, value: findingsBySev[s.key], fill: s.color })).filter(
+        (d) => d.value > 0,
+      ),
     [findingsBySev],
   );
 
@@ -565,10 +628,7 @@ export default function DashboardPage() {
   }, [usageStats]);
 
   // priced = at least one profile has a price set, so the panel can tell "nothing priced" from "€0 spent".
-  const costPriced = React.useMemo(
-    () => (usageStats?.by_profile ?? []).some((p) => p.cost_eur != null),
-    [usageStats],
-  );
+  const costPriced = React.useMemo(() => (usageStats?.by_profile ?? []).some((p) => p.cost_eur != null), [usageStats]);
   const totalCost = React.useMemo(() => costByProfile.reduce((a, b) => a + b.cost, 0), [costByProfile]);
   const costPerFinding = findings.length > 0 ? totalCost / findings.length : 0;
   const costMax = costByProfile[0]?.cost ?? 1;
@@ -583,10 +643,15 @@ export default function DashboardPage() {
       if (d.date < cutoff || d.cost_eur == null) continue;
       m.set(d.date, (m.get(d.date) ?? 0) + d.cost_eur);
     }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, cost]) => ({ date: date.slice(5), cost }));
+    return [...m.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, cost]) => ({ date: date.slice(5), cost }));
   }, [usageStats]);
 
-  // ── Findings over time (client-side bucket of confirmed findings, last 30 days) ──
+  // ── Findings over time (confirmed findings, last 30 days) ──
+  // Running cumulative per severity, for a single-axis stacked area. The top edge is
+  // the total found to date (slope = discovery rate); the bands show the severity mix
+  // as it grows. Replaces the old dual-axis bars+line (two y-scales — a dataviz anti-pattern).
   const findingsOverTime = React.useMemo(() => {
     const now = new Date();
     now.setDate(now.getDate() - 30);
@@ -601,12 +666,48 @@ export default function DashboardPage() {
       m.set(date, prev);
     }
     const sorted = [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-    let cum = 0;
+    const run = { critical: 0, high: 0, medium: 0, low: 0 };
     return sorted.map(([date, v]) => {
-      cum += v.critical + v.high + v.medium + v.low;
-      return { date: date.slice(5), ...v, cumulative: cum };
+      run.critical += v.critical;
+      run.high += v.high;
+      run.medium += v.medium;
+      run.low += v.low;
+      return { date: date.slice(5), ...run, total: run.critical + run.high + run.medium + run.low };
     });
   }, [findings]);
+
+  // ── KPI sparkline series (last 14 days, zero-filled) ───────────────────────────
+  // Small daily trajectories that sit beside the headline stat numbers.
+  const spark = React.useMemo(() => {
+    const DAYS = 14;
+    const days: string[] = [];
+    const idx = new Map<string, number>();
+    const base = new Date();
+    for (let i = DAYS - 1; i >= 0; i--) {
+      const d = new Date(base);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      idx.set(key, days.length);
+      days.push(key);
+    }
+    const blank = () => new Array(DAYS).fill(0) as number[];
+    const findingsSeries = blank();
+    for (const f of findings) {
+      const i = idx.get((f.ts ?? "").slice(0, 10));
+      if (i !== undefined) findingsSeries[i] += 1;
+    }
+    const trafficSeries = blank();
+    for (const e of traffic) {
+      const i = idx.get(new Date(e.ts).toISOString().slice(0, 10));
+      if (i !== undefined) trafficSeries[i] += 1;
+    }
+    const tokensSeries = blank();
+    for (const d of usageStats?.daily ?? []) {
+      const i = idx.get(d.date);
+      if (i !== undefined) tokensSeries[i] += d.input_tokens + d.output_tokens;
+    }
+    return { findings: findingsSeries, traffic: trafficSeries, tokens: tokensSeries };
+  }, [findings, traffic, usageStats]);
 
   // Findings by vulnerability class (top 8), for the per-class bar list.
   const findingsByVulnclass = React.useMemo(() => {
@@ -667,7 +768,9 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px]">
-            {(tasksByStatus.running ?? 0) > 0 && <span className="text-blue-400">Exploring {tasksByStatus.running}</span>}
+            {(tasksByStatus.running ?? 0) > 0 && (
+              <span className="text-blue-400">Exploring {tasksByStatus.running}</span>
+            )}
             {(tasksByStatus.paused ?? 0) > 0 && <span className="text-amber-400">Paused {tasksByStatus.paused}</span>}
             {(tasksByStatus.done ?? 0) > 0 && <span className="text-emerald-400">Completed {tasksByStatus.done}</span>}
             {tasks.length === 0 && <span className="text-muted-foreground">No tasks</span>}
@@ -680,12 +783,15 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <BugIcon className="size-3" /> Confirmed findings
             </div>
-            <div className="text-2xl font-semibold tabular-nums">{findings.length}</div>
+            <div className="flex items-end justify-between gap-2">
+              <span className="text-2xl font-semibold tabular-nums">{findings.length}</span>
+              <Sparkline data={spark.findings} color="#dc2626" />
+            </div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
-            <span className="text-rose-500">Critical {findingsBySev.critical}</span>
-            <span className="text-red-400">High {findingsBySev.high}</span>
-            <span className="text-amber-400">Medium {findingsBySev.medium}</span>
+            <span className="text-red-600">Critical {findingsBySev.critical}</span>
+            <span className="text-orange-500">High {findingsBySev.high}</span>
+            <span className="text-amber-500">Medium {findingsBySev.medium}</span>
             <span className="text-slate-400">Low {findingsBySev.low}</span>
           </CardContent>
         </Card>
@@ -707,7 +813,10 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <ActivityIcon className="size-3" /> Traffic exchanges
             </div>
-            <div className="text-2xl font-semibold tabular-nums">{traffic.length}</div>
+            <div className="flex items-end justify-between gap-2">
+              <span className="text-2xl font-semibold tabular-nums">{traffic.length}</span>
+              <Sparkline data={spark.traffic} color="#3b82f6" />
+            </div>
           </CardHeader>
           <CardContent className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
             {settings?.traffic_capture ? (
@@ -727,8 +836,11 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <ZapIcon className="size-3" /> Token usage
             </div>
-            <div className="text-2xl font-semibold tabular-nums">
-              {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+            <div className="flex items-end justify-between gap-2">
+              <span className="text-2xl font-semibold tabular-nums">
+                {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+              </span>
+              <Sparkline data={spark.tokens} color="#f59e0b" />
             </div>
           </CardHeader>
           <CardContent className="text-[10px] text-muted-foreground">
@@ -1015,7 +1127,15 @@ export default function DashboardPage() {
               <ChartContainer config={sevConfig} className="h-[180px] min-w-0 flex-1">
                 <PieChart>
                   <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="label" hideLabel />} />
-                  <Pie data={sevChartData} dataKey="value" nameKey="label" innerRadius={52} outerRadius={78} strokeWidth={2} paddingAngle={2}>
+                  <Pie
+                    data={sevChartData}
+                    dataKey="value"
+                    nameKey="label"
+                    innerRadius={52}
+                    outerRadius={78}
+                    strokeWidth={2}
+                    paddingAngle={2}
+                  >
                     {sevChartData.map((d) => (
                       <Cell key={d.key} fill={d.fill} />
                     ))}
@@ -1068,14 +1188,7 @@ export default function DashboardPage() {
               <BarChart data={taskStatusData} layout="vertical" margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-border/50" />
                 <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} />
-                <YAxis
-                  type="category"
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  width={64}
-                  fontSize={11}
-                />
+                <YAxis type="category" dataKey="label" tickLine={false} axisLine={false} width={64} fontSize={11} />
                 <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={26}>
                   {taskStatusData.map((d, i) => (
@@ -1182,7 +1295,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* Per-day findings by severity + cumulative line */}
         <Card className="p-4 lg:col-span-2">
-          <SectionTitle icon={BugIcon} sub="last 30 days">
+          <SectionTitle icon={BugIcon} sub="cumulative · last 30 days">
             Findings over time
           </SectionTitle>
           {findingsOverTime.length === 0 ? (
@@ -1192,28 +1305,43 @@ export default function DashboardPage() {
               <ComposedChart data={findingsOverTime} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/50" />
                 <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} minTickGap={16} />
-                <YAxis yAxisId="left" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} width={24} />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  allowDecimals={false}
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={10}
-                  width={28}
-                />
+                <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} width={28} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar yAxisId="left" dataKey="critical" stackId="s" fill="var(--color-critical)" maxBarSize={28} />
-                <Bar yAxisId="left" dataKey="high" stackId="s" fill="var(--color-high)" />
-                <Bar yAxisId="left" dataKey="medium" stackId="s" fill="var(--color-medium)" />
-                <Bar yAxisId="left" dataKey="low" stackId="s" fill="var(--color-low)" radius={[2, 2, 0, 0]} />
-                <Line
-                  yAxisId="right"
+                <Area
                   type="monotone"
-                  dataKey="cumulative"
-                  stroke="var(--color-cumulative)"
-                  strokeWidth={2}
-                  dot={false}
+                  dataKey="critical"
+                  stackId="s"
+                  stroke="var(--color-critical)"
+                  fill="var(--color-critical)"
+                  fillOpacity={0.8}
+                  strokeWidth={1}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="high"
+                  stackId="s"
+                  stroke="var(--color-high)"
+                  fill="var(--color-high)"
+                  fillOpacity={0.8}
+                  strokeWidth={1}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="medium"
+                  stackId="s"
+                  stroke="var(--color-medium)"
+                  fill="var(--color-medium)"
+                  fillOpacity={0.8}
+                  strokeWidth={1}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="low"
+                  stackId="s"
+                  stroke="var(--color-low)"
+                  fill="var(--color-low)"
+                  fillOpacity={0.8}
+                  strokeWidth={1}
                 />
               </ComposedChart>
             </ChartContainer>
@@ -1225,9 +1353,6 @@ export default function DashboardPage() {
                 {s.label}
               </span>
             ))}
-            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <span className="h-0.5 w-3 rounded-full" style={{ background: "var(--chart-1)" }} /> Cumulative
-            </span>
           </div>
         </Card>
 

@@ -21,6 +21,7 @@ import type {
   FindingTraffic,
   FindingTrafficBinding,
   IntentAsset,
+  ScanSchedule,
   ScopeRow,
   Task,
   TaskArchive,
@@ -220,6 +221,25 @@ type MockTaskAssetSource = Pick<Asset, "task_source" | "task_source_summary" | "
 const mockTaskAssetSources = new Map<string, MockTaskAssetSource>();
 let nextMockTaskAssetID = D.tasks.length + 1;
 let mockActiveTask = D.ACTIVE_TASK;
+
+// In-memory recurring-scan schedules (demo only).
+const mockScanSchedules: ScanSchedule[] = [
+  {
+    id: 1,
+    name: "Nightly external surface scan",
+    enabled: true,
+    interval_sec: 24 * 60 * 60,
+    description: "Pentest https://staging.example.com — enumerate and test the public web surface.",
+    goal: "Find authentication and access-control flaws.",
+    llm_profile_id: null,
+    timeout_seconds: 3600,
+    last_run_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+    last_task_id: 1,
+    run_count: 4,
+    created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+  },
+];
+let mockScanScheduleSeq = 1;
 
 function mockTaskAssetSourceKey(taskID: string, assetID: number): string {
   return JSON.stringify([taskID, assetID]);
@@ -2478,6 +2498,50 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       cache_write_tokens: 0,
       daily: [],
     };
+
+  // ── Recurring scan schedules ──
+  if (path === "/scan-schedules" && m === "GET") return { schedules: structuredClone(mockScanSchedules) };
+  if (path === "/scan-schedules" && m === "POST") {
+    const sched: ScanSchedule = {
+      id: ++mockScanScheduleSeq,
+      name: String(b.name ?? "").trim(),
+      enabled: b.enabled !== false,
+      interval_sec: Number(b.interval_sec) || 3600,
+      description: String(b.description ?? "").trim(),
+      goal: String(b.goal ?? "").trim(),
+      llm_profile_id: b.llm_profile_id == null ? null : Number(b.llm_profile_id),
+      timeout_seconds: Math.max(0, Number(b.timeout_seconds) || 0),
+      last_run_at: null,
+      last_task_id: null,
+      run_count: 0,
+      created_at: new Date().toISOString(),
+    };
+    mockScanSchedules.unshift(sched);
+    return sched;
+  }
+  if (seg[0] === "scan-schedules" && seg.length === 2 && m === "PATCH") {
+    const s = mockScanSchedules.find((x) => x.id === Number(seg[1]));
+    if (!s) throw new Error("schedule not found");
+    s.name = String(b.name ?? s.name).trim();
+    s.enabled = b.enabled !== false;
+    s.interval_sec = Number(b.interval_sec) || s.interval_sec;
+    s.description = String(b.description ?? s.description).trim();
+    s.goal = String(b.goal ?? s.goal).trim();
+    s.llm_profile_id = b.llm_profile_id == null ? null : Number(b.llm_profile_id);
+    s.timeout_seconds = Math.max(0, Number(b.timeout_seconds) || 0);
+    return { ok: true };
+  }
+  if (seg[0] === "scan-schedules" && seg.length === 2 && m === "DELETE") {
+    const i = mockScanSchedules.findIndex((x) => x.id === Number(seg[1]));
+    if (i < 0) throw new Error("schedule not found");
+    mockScanSchedules.splice(i, 1);
+    return { deleted: Number(seg[1]) };
+  }
+  if (seg[0] === "scan-schedules" && seg[2] === "run" && m === "POST") {
+    const s = mockScanSchedules.find((x) => x.id === Number(seg[1]));
+    if (!s) throw new Error("schedule not found");
+    return { task_id: String(mockTasks[0]?.id ?? "1") };
+  }
 
   // ── Side questions (/btw): no side-question sessions in the demo ──
   // Must match explicitly: a path ending in s is treated as a collection by the read fallback below and returns [], leaving items undefined.

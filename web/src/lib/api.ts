@@ -73,6 +73,8 @@ import type {
   NotificationMeta,
   PromptVar,
   PromptVersion,
+  ScanSchedule,
+  ScanScheduleInput,
   SessionTokenUsage,
   Settings,
   Severity,
@@ -1047,6 +1049,11 @@ export const api = {
     session_header_key?: string; // non-empty = send this HTTP header on every request, value = the current session id; "" = not sent
     user_agent?: string; // non-empty = override the User-Agent header on every request; "" = keep the default UA
     retry?: LLMRetryOverride; // this profile's retry override; all zeros = follow the global retry policy
+    // Cost ledger: price per 1M tokens (0 = unset; the cost panels skip unpriced profiles).
+    price_input_per_m?: number;
+    price_output_per_m?: number;
+    price_cache_read_per_m?: number;
+    price_cache_write_per_m?: number;
   }) => post<{ id: number }>("/llm/profiles", p),
   deleteLLMProfile: (id: string) => del<{ deleted: number }>(`/llm/profiles/${id}`),
   activateLLMProfile: (id: string) => post<{ ok: boolean }>("/llm/profiles/active", { id: Number(id) }),
@@ -1131,6 +1138,14 @@ export const api = {
   updateTrigger: (id: number, t: Omit<AgentTrigger, "id" | "agent_key" | "last_fire">) =>
     patch<{ ok: boolean }>(`/triggers/${id}`, t),
   deleteTrigger: (id: number) => del<{ deleted: number }>(`/triggers/${id}`),
+  // Recurring scan schedules (automation)
+  scanSchedules: () =>
+    get<{ schedules: ScanSchedule[] }>(`/scan-schedules`).then((r) => arr(r.schedules)),
+  createScanSchedule: (s: ScanScheduleInput) => post<ScanSchedule>(`/scan-schedules`, s),
+  updateScanSchedule: (id: number, s: ScanScheduleInput) =>
+    patch<{ ok: boolean }>(`/scan-schedules/${id}`, s),
+  deleteScanSchedule: (id: number) => del<{ deleted: number }>(`/scan-schedules/${id}`),
+  runScanSchedule: (id: number) => post<{ task_id: string }>(`/scan-schedules/${id}/run`, {}),
   saveAgentConfig: (
     key: string,
     patch: {

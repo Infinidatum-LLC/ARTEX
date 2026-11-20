@@ -64,6 +64,7 @@ export default function NotifyPage() {
   const [digestMin, setDigestMin] = React.useState("");
   const [summaryMax, setSummaryMax] = React.useState("");
   const [assetsMax, setAssetsMax] = React.useState("");
+  const [taskComplete, setTaskComplete] = React.useState(false);
 
   const load = React.useCallback(() => {
     api
@@ -80,6 +81,7 @@ export default function NotifyPage() {
       .then((s) => {
         setSummaryMax(String(s.notify_summary_max_runes ?? ""));
         setAssetsMax(String(s.notify_assets_max_shown ?? ""));
+        setTaskComplete(Boolean(s.notify_task_complete));
       })
       .catch((e) => toast.error(`Failed to load message limits: ${(e as Error).message}`));
     // Channel-list load failures must be reported: failing silently would render as "no channels at all",
@@ -265,6 +267,19 @@ export default function NotifyPage() {
     }
   }
 
+  async function toggleTaskComplete(on: boolean) {
+    setGlobalSaving(true);
+    try {
+      await api.setSettings({ notify_task_complete: on });
+      setTaskComplete(on);
+      toast.success(on ? "Task-completion alerts on" : "Task-completion alerts off");
+    } catch (e) {
+      toast.error("Operation failed: " + (e as Error).message);
+    } finally {
+      setGlobalSaving(false);
+    }
+  }
+
   async function saveGlobal() {
     // Checked before anything is sent: the backend applies the fields of one PUT in order,
     // so a 400 on a limit would leave the URL and digest interval already saved.
@@ -398,6 +413,20 @@ export default function NotifyPage() {
             <p className="text-muted-foreground text-xs">
               Most asset names listed for a finding, 0–{ASSETS_LIMIT_MAX}. 0 = no truncation (all assets listed).
             </p>
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border p-3 sm:col-span-2">
+            <div>
+              <div className="text-sm font-medium">Task-completion alerts</div>
+              <p className="text-muted-foreground text-xs">
+                Send a heads-up to every enabled channel when a task finishes (done, failed, or timed out), with its finding counts. Off by default; separate from per-finding alerts.
+              </p>
+            </div>
+            <Switch
+              checked={taskComplete}
+              disabled={globalSaving}
+              onCheckedChange={toggleTaskComplete}
+              aria-label="Task-completion alerts"
+            />
           </div>
           <div className="sm:col-span-2">
             <Button onClick={saveGlobal} disabled={globalSaving}>

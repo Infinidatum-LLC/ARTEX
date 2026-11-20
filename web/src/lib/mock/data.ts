@@ -3343,6 +3343,7 @@ export const settings: Settings = {
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,
+  notify_task_complete: false,
 };
 
 // ── LLM polling (failover)──────────────────────────────────────────────────────

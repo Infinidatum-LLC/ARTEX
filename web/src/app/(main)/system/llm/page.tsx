@@ -338,6 +338,11 @@ function ProfileSheet({
   const [sessionHeaderKey, setSessionHeaderKey] = React.useState(""); // custom session header name; empty = not sent
   const [userAgent, setUserAgent] = React.useState(""); // custom User-Agent; empty = keep the default UA
   const [retry, setRetry] = React.useState<LLMRetryOverride>(ZERO_OVERRIDE); // retry override for this profile; all 0 = follow the global
+  // Cost ledger: price per 1M tokens (string-held for the inputs; 0/"" = unset).
+  const [priceIn, setPriceIn] = React.useState("0");
+  const [priceOut, setPriceOut] = React.useState("0");
+  const [priceCacheRead, setPriceCacheRead] = React.useState("0");
+  const [priceCacheWrite, setPriceCacheWrite] = React.useState("0");
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [models, setModels] = React.useState<string[]>([]);
@@ -371,6 +376,10 @@ function ProfileSheet({
     setSessionHeaderKey(profile?.session_header_key ?? "");
     setUserAgent(profile?.user_agent ?? "");
     setRetry(profile?.retry ?? ZERO_OVERRIDE);
+    setPriceIn(String(profile?.price_input_per_m ?? 0));
+    setPriceOut(String(profile?.price_output_per_m ?? 0));
+    setPriceCacheRead(String(profile?.price_cache_read_per_m ?? 0));
+    setPriceCacheWrite(String(profile?.price_cache_write_per_m ?? 0));
     setApiKey("");
     setKeyHint(profile?.api_key_hint ?? "");
     setModels([]);
@@ -472,6 +481,10 @@ function ProfileSheet({
         session_header_key: sessionHeaderKey.trim(),
         user_agent: userAgent.trim(),
         retry,
+        price_input_per_m: Math.max(0, Number(priceIn) || 0),
+        price_output_per_m: Math.max(0, Number(priceOut) || 0),
+        price_cache_read_per_m: Math.max(0, Number(priceCacheRead) || 0),
+        price_cache_write_per_m: Math.max(0, Number(priceCacheWrite) || 0),
       });
       if (isNew) toast.success(`Created: ${name.trim()} (use "Set as active" on its card to enable it)`);
       else toast.success(profile?.is_default ? "Saved; the active profile takes effect immediately, no restart needed" : "Saved");
@@ -847,6 +860,70 @@ function ProfileSheet({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="grid gap-3 rounded-lg border p-3">
+            <div className="grid gap-0.5">
+              <Label className="text-sm">Cost ledger · price per 1M tokens</Label>
+              <p className="text-muted-foreground text-xs">
+                Used only to price the token ledger into a cost figure (EUR) on the dashboard and task pages — never sent to the
+                provider. Leave at 0 to show no cost for this profile. Enter the provider's list price in EUR per 1 million
+                tokens for each bucket.
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="p-price-in">Input</Label>
+                <Input
+                  id="p-price-in"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={priceIn}
+                  onChange={(e) => setPriceIn(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="p-price-out">Output</Label>
+                <Input
+                  id="p-price-out"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={priceOut}
+                  onChange={(e) => setPriceOut(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="p-price-cr">Cache read</Label>
+                <Input
+                  id="p-price-cr"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={priceCacheRead}
+                  onChange={(e) => setPriceCacheRead(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="p-price-cw">Cache write</Label>
+                <Input
+                  id="p-price-cw"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={priceCacheWrite}
+                  onChange={(e) => setPriceCacheWrite(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Input is billed on fresh tokens only (cache read / write are subtracted first, then billed at their own rates), matching how the ledger computes spend.
+            </p>
           </div>
 
           <ProfileRetryFields value={retry} onChange={setRetry} />

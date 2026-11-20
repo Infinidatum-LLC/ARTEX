@@ -924,6 +924,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents/{key}/triggers", s.pgCreateTrigger)
 	mux.HandleFunc("PATCH /api/triggers/{id}", s.pgUpdateTrigger)
 	mux.HandleFunc("DELETE /api/triggers/{id}", s.pgDeleteTrigger)
+	mux.HandleFunc("GET /api/scan-schedules", s.pgListScanSchedules)
+	mux.HandleFunc("POST /api/scan-schedules", s.pgCreateScanSchedule)
+	mux.HandleFunc("PATCH /api/scan-schedules/{id}", s.pgUpdateScanSchedule)
+	mux.HandleFunc("DELETE /api/scan-schedules/{id}", s.pgDeleteScanSchedule)
+	mux.HandleFunc("POST /api/scan-schedules/{id}/run", s.pgRunScanSchedule)
 	mux.HandleFunc("GET /api/agents/{key}/prompts", s.pgListPromptVersions)
 	mux.HandleFunc("GET /api/agents/{key}/variables", s.pgPromptVars)
 	mux.HandleFunc("POST /api/agents/{key}/prompt/preview", s.pgPreviewPrompt)
@@ -3728,6 +3733,9 @@ func (s *Server) settingsPayload() map[string]any {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
+		// Task-completion alerts (off by default): a lifecycle heads-up sent to every
+		// enabled channel when a task reaches a terminal state. Separate from finding alerts.
+		"notify_task_complete": s.m.pg.GetBool(settingNotifyTaskComplete, false),
 		// Render limits of IM messages; 0 = no truncation.
 		"notify_summary_max_runes": limits.SummaryRunes,
 		"notify_assets_max_shown":  limits.AssetsShown,
@@ -3807,6 +3815,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NotifyEnabled    *bool   `json:"notify_enabled"`
 		NotifyBaseURL    *string `json:"notify_public_base_url"`
 		NotifyDigestMins *int    `json:"notify_digest_interval_min"`
+		// Task-completion alerts switch (default off); read every round by the notifier, immediate effect.
+		NotifyTaskComplete *bool `json:"notify_task_complete"`
 		// Render limits of IM messages: summary characters (0-4000) and asset names listed (0-50); 0 = no truncation.
 		NotifySummaryMaxRunes *int `json:"notify_summary_max_runes"`
 		NotifyAssetsMaxShown  *int `json:"notify_assets_max_shown"`
@@ -3856,6 +3866,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	// Push global settings: the delivery engine re-reads them every round, so they take effect immediately without a restart.
 	if req.NotifyEnabled != nil {
 		if err := s.m.pg.SetBool(settingNotifyEnabled, *req.NotifyEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.NotifyTaskComplete != nil {
+		if err := s.m.pg.SetBool(settingNotifyTaskComplete, *req.NotifyTaskComplete); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

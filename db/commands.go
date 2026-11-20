@@ -242,6 +242,9 @@ type ModelTokenStat struct {
 	OutputTokens     int    `json:"output_tokens"`
 	CacheReadTokens  int    `json:"cache_read_tokens"`
 	CacheWriteTokens int    `json:"cache_write_tokens"`
+	// CostEur is this model's spend on the task, priced from the LLM profile(s)
+	// that drove the calls. nil = none of those profiles carry a price.
+	CostEur *float64 `json:"cost_eur,omitempty"`
 }
 
 // LLMTask is one distinct task with its LLM-record count.

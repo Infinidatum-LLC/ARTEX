@@ -9,9 +9,12 @@ import {
   ArrowUpRightIcon,
   BugIcon,
   ClockIcon,
+  CoinsIcon,
+  LayersIcon,
   NetworkIcon,
   ShieldCheckIcon,
   TargetIcon,
+  TrendingUpIcon,
   ZapIcon,
 } from "lucide-react";
 import {
@@ -19,7 +22,9 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Label,
+  Line,
   Pie,
   PieChart,
   Tooltip as RechartsTooltip,
@@ -91,6 +96,20 @@ const taskStatusConfig = {
   count: { label: "Tasks" },
 } satisfies ChartConfig;
 
+// Daily cost trend — amber, matching the token-cost accents used elsewhere.
+const costTrendConfig = {
+  cost: { label: "Cost", color: "hsl(43 96% 56%)" },
+} satisfies ChartConfig;
+
+// Findings-over-time — stacked severity bars + a cumulative line.
+const findingsTrendConfig = {
+  critical: { label: "Critical", color: SEV_META[0].color },
+  high: { label: "High", color: SEV_META[1].color },
+  medium: { label: "Medium", color: SEV_META[2].color },
+  low: { label: "Low", color: SEV_META[3].color },
+  cumulative: { label: "Cumulative", color: "var(--chart-1)" },
+} satisfies ChartConfig;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function fmtRel(ts?: string | number): string {
@@ -109,6 +128,14 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(1) + "k";
   return String(n);
+}
+
+// Monetary cost formatting (EUR). Sub-cent spend keeps extra precision so a tiny run never reads as "€0.00".
+function fmtCost(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "€0.00";
+  if (n < 0.01) return "€" + n.toFixed(4);
+  if (n < 1) return "€" + n.toFixed(3);
+  return "€" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 const ASSET_TYPE_LABELS: Record<string, string> = {
@@ -526,6 +553,74 @@ export default function DashboardPage() {
   }, [usageStats, tokenDays, tokenTab, profileIdByName, defaultProfileId]);
 
   const dailyTokenData = tokenVersion === "new" ? dailyTokenDataNew : dailyTokenDataOld;
+
+  // ── Cost & efficiency (priced from llm_usage × profile prices) ──────────────
+  // Only profiles that carry a price contribute; costByProfile drops the unpriced ones.
+  const costByProfile = React.useMemo(() => {
+    const rows: { name: string; cost: number }[] = [];
+    for (const p of usageStats?.by_profile ?? []) {
+      if (p.cost_eur != null && p.cost_eur > 0) rows.push({ name: p.profile_name || "—", cost: p.cost_eur });
+    }
+    return rows.sort((a, b) => b.cost - a.cost);
+  }, [usageStats]);
+
+  // priced = at least one profile has a price set, so the panel can tell "nothing priced" from "€0 spent".
+  const costPriced = React.useMemo(
+    () => (usageStats?.by_profile ?? []).some((p) => p.cost_eur != null),
+    [usageStats],
+  );
+  const totalCost = React.useMemo(() => costByProfile.reduce((a, b) => a + b.cost, 0), [costByProfile]);
+  const costPerFinding = findings.length > 0 ? totalCost / findings.length : 0;
+  const costMax = costByProfile[0]?.cost ?? 1;
+
+  // Daily cost trend from llm_usage (last 30 days, real call dates).
+  const dailyCostData = React.useMemo(() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 30);
+    const cutoff = now.toISOString().slice(0, 10);
+    const m = new Map<string, number>();
+    for (const d of usageStats?.daily ?? []) {
+      if (d.date < cutoff || d.cost_eur == null) continue;
+      m.set(d.date, (m.get(d.date) ?? 0) + d.cost_eur);
+    }
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, cost]) => ({ date: date.slice(5), cost }));
+  }, [usageStats]);
+
+  // ── Findings over time (client-side bucket of confirmed findings, last 30 days) ──
+  const findingsOverTime = React.useMemo(() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 30);
+    const cutoff = now.toISOString().slice(0, 10);
+    const m = new Map<string, { critical: number; high: number; medium: number; low: number }>();
+    for (const f of findings) {
+      const date = (f.ts ?? "").slice(0, 10);
+      if (!date || date < cutoff) continue;
+      const prev = m.get(date) ?? { critical: 0, high: 0, medium: 0, low: 0 };
+      const k = f.severity as "critical" | "high" | "medium" | "low";
+      if (k in prev) prev[k]++;
+      m.set(date, prev);
+    }
+    const sorted = [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+    let cum = 0;
+    return sorted.map(([date, v]) => {
+      cum += v.critical + v.high + v.medium + v.low;
+      return { date: date.slice(5), ...v, cumulative: cum };
+    });
+  }, [findings]);
+
+  // Findings by vulnerability class (top 8), for the per-class bar list.
+  const findingsByVulnclass = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of findings) {
+      const vc = (f.vulnclass || "").trim() || "other";
+      m.set(vc, (m.get(vc) ?? 0) + 1);
+    }
+    return [...m.entries()]
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 8)
+      .map(([vulnclass, count]) => ({ vulnclass, count }));
+  }, [findings]);
+  const vulnclassMax = findingsByVulnclass[0]?.count ?? 1;
 
   // activity kind label
   function kindLabel(a: Activity): string {
@@ -989,6 +1084,177 @@ export default function DashboardPage() {
                 </Bar>
               </BarChart>
             </ChartContainer>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Row 2.6: Cost & efficiency ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {/* Cost summary + per-profile breakdown */}
+        <Card className="p-4 lg:col-span-1">
+          <SectionTitle icon={CoinsIcon} sub={costPriced ? "from priced profiles" : undefined}>
+            Cost &amp; efficiency
+          </SectionTitle>
+          {!costPriced ? (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              No LLM prices set yet.
+              <br />
+              <Link href="/system/llm" className="text-foreground underline underline-offset-2 hover:text-primary">
+                Add a price per 1M tokens
+              </Link>{" "}
+              on a profile to see spend.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-end justify-between gap-2">
+                <div>
+                  <div className="text-2xl font-semibold tabular-nums text-amber-500">{fmtCost(totalCost)}</div>
+                  <div className="text-[10px] text-muted-foreground">Total spend (all time)</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-semibold tabular-nums">{fmtCost(costPerFinding)}</div>
+                  <div className="text-[10px] text-muted-foreground">per confirmed finding</div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                {costByProfile.length === 0 ? (
+                  <div className="py-2 text-center text-[11px] text-muted-foreground">No priced spend recorded yet</div>
+                ) : (
+                  costByProfile.map((p) => (
+                    <div key={p.name} className="flex items-center gap-2 text-[11px]">
+                      <span className="w-24 shrink-0 truncate text-muted-foreground" title={p.name}>
+                        {p.name}
+                      </span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-amber-500"
+                          style={{ width: `${Math.max(3, (p.cost / costMax) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="w-14 shrink-0 text-right font-medium tabular-nums">{fmtCost(p.cost)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </Card>
+
+        {/* Daily spend trend */}
+        <Card className="p-4 lg:col-span-2">
+          <SectionTitle icon={TrendingUpIcon} sub="last 30 days">
+            Daily spend
+          </SectionTitle>
+          {!costPriced || dailyCostData.length === 0 ? (
+            <div className="py-12 text-center text-xs text-muted-foreground">
+              {costPriced ? "No priced spend in the last 30 days" : "Set LLM prices to chart daily spend"}
+            </div>
+          ) : (
+            <ChartContainer config={costTrendConfig} className="h-[200px] w-full">
+              <BarChart data={dailyCostData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} maxBarSize={40}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/50" />
+                <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} minTickGap={16} />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={10}
+                  width={44}
+                  tickFormatter={(v) => fmtCost(Number(v))}
+                />
+                <ChartTooltip
+                  cursor={false}
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => (
+                        <span className="font-mono font-semibold tabular-nums">{fmtCost(Number(value))}</span>
+                      )}
+                    />
+                  }
+                />
+                <Bar dataKey="cost" fill="var(--color-cost)" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Row 2.7: Findings over time ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {/* Per-day findings by severity + cumulative line */}
+        <Card className="p-4 lg:col-span-2">
+          <SectionTitle icon={BugIcon} sub="last 30 days">
+            Findings over time
+          </SectionTitle>
+          {findingsOverTime.length === 0 ? (
+            <div className="py-12 text-center text-xs text-muted-foreground">No findings in the last 30 days</div>
+          ) : (
+            <ChartContainer config={findingsTrendConfig} className="h-[200px] w-full">
+              <ComposedChart data={findingsOverTime} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/50" />
+                <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} minTickGap={16} />
+                <YAxis yAxisId="left" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} width={24} />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  allowDecimals={false}
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={10}
+                  width={28}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar yAxisId="left" dataKey="critical" stackId="s" fill="var(--color-critical)" maxBarSize={28} />
+                <Bar yAxisId="left" dataKey="high" stackId="s" fill="var(--color-high)" />
+                <Bar yAxisId="left" dataKey="medium" stackId="s" fill="var(--color-medium)" />
+                <Bar yAxisId="left" dataKey="low" stackId="s" fill="var(--color-low)" radius={[2, 2, 0, 0]} />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="cumulative"
+                  stroke="var(--color-cumulative)"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </ComposedChart>
+            </ChartContainer>
+          )}
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+            {SEV_META.map((s) => (
+              <span key={s.key} className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <span className="size-2 rounded-sm" style={{ background: s.color }} />
+                {s.label}
+              </span>
+            ))}
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <span className="h-0.5 w-3 rounded-full" style={{ background: "var(--chart-1)" }} /> Cumulative
+            </span>
+          </div>
+        </Card>
+
+        {/* Findings by vulnerability class */}
+        <Card className="p-4 lg:col-span-1">
+          <SectionTitle icon={LayersIcon} sub={`${findingsByVulnclass.length} types`}>
+            By vulnerability class
+          </SectionTitle>
+          {findingsByVulnclass.length === 0 ? (
+            <div className="py-12 text-center text-xs text-muted-foreground">No findings yet</div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {findingsByVulnclass.map((v) => (
+                <div key={v.vulnclass} className="flex items-center gap-2 text-[11px]">
+                  <span className="w-24 shrink-0 truncate text-muted-foreground" title={v.vulnclass}>
+                    {v.vulnclass}
+                  </span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${Math.max(3, (v.count / vulnclassMax) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-8 shrink-0 text-right font-medium tabular-nums">{v.count}</span>
+                </div>
+              ))}
+            </div>
           )}
         </Card>
       </div>

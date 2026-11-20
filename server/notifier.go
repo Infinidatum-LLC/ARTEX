@@ -162,6 +162,10 @@ func (n *Notifier) step(ctx context.Context) {
 		return
 	}
 	baseURL := n.publicBaseURL()
+	// Task-completion alerts ride the same tick but take a separate, finding-free
+	// path (see stepTaskAlerts). Gated off by default and best-effort, so it never
+	// blocks or fails the finding pipeline below.
+	n.stepTaskAlerts(ctx, channels, baseURL)
 	for _, ch := range channels {
 		if !ch.IsEnabled() {
 			continue

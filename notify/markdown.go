@@ -87,6 +87,12 @@ func markdownText(s string, maxRunes int) string {
 // added to the shared function, and Telegram messages ended up showing visible
 // backslashes like `\(1\)`.
 func markdownTitle(m Message) string {
+	if m.hasNotice() {
+		if m.Notice.Title != "" {
+			return m.Notice.Title
+		}
+		return "Notification"
+	}
 	if m.Batch {
 		return fmt.Sprintf("Vulnerability digest · %d total", len(m.Items))
 	}
@@ -109,6 +115,9 @@ func markdownTitle(m Message) string {
 //
 // maxBytes<=0 means unlimited.
 func markdownBody(m Message, maxBytes int) (string, int) {
+	if m.hasNotice() {
+		return TruncateBytes(noticeMarkdown(m.Notice), maxBytes), 1
+	}
 	if !m.Batch {
 		if len(m.Items) == 0 {
 			return "", 0
@@ -228,4 +237,26 @@ func writeItem(b *strings.Builder, it Item, prefix string, single bool, lim Limi
 	if it.DetailURL != "" {
 		fmt.Fprintf(b, "[View details](%s)\n", it.DetailURL)
 	}
+}
+
+// noticeMarkdown renders a Notice as a Markdown body (DingTalk / WeCom). The
+// title is emitted bold on its own line, each body line is single-lined and
+// escaped like any other untrusted content, and the backlink is appended as a
+// clickable link. The title is repeated in the body because several transports
+// put the markdownTitle only in a separate "title" field that some clients do
+// not render in the message area.
+func noticeMarkdown(n *Notice) string {
+	var b strings.Builder
+	if n.Title != "" {
+		fmt.Fprintf(&b, "**%s**\n", markdownText(n.Title, 0))
+	}
+	for _, line := range n.Lines {
+		if s := markdownText(line, 0); s != "" {
+			b.WriteString(s + "\n")
+		}
+	}
+	if n.URL != "" {
+		fmt.Fprintf(&b, "[View on the platform](%s)\n", n.URL)
+	}
+	return b.String()
 }

@@ -723,6 +723,35 @@ export interface AgentTrigger {
   last_fire?: string;
 }
 
+// ---- Recurring scan schedules (automation) ----
+// One recurring-scan definition: every interval_sec the server auto-creates a pentest
+// task from (description, goal, llm_profile_id, timeout_seconds). Mirrors db.ScanSchedule.
+export interface ScanSchedule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  interval_sec: number; // fire cadence in seconds (floor 60)
+  description: string; // task description the fire creates
+  goal: string; // optional task goal
+  llm_profile_id?: number | null; // LLM profile for created tasks; null/absent = default
+  timeout_seconds: number; // per-task timeout (0 = none)
+  last_run_at?: string | null; // last fire time (ISO); absent = never fired
+  last_task_id?: number | null; // task id the last fire created
+  run_count: number; // total fires so far
+  created_at: string;
+}
+
+// Create/update payload for a scan schedule (run bookkeeping is server-managed).
+export interface ScanScheduleInput {
+  name: string;
+  enabled: boolean;
+  interval_sec: number;
+  description: string;
+  goal: string;
+  llm_profile_id?: number | null;
+  timeout_seconds: number;
+}
+
 // ---- Conversations (chat page) ----
 export interface ActiveFindingRetest {
   id: number;
@@ -840,6 +869,9 @@ export interface ProfileDayUsage {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
+  // EUR cost for this (profile, day) bucket, priced from the profile's stored prices;
+  // absent when the profile has no price set. Cache-write is approximated as 0 for daily buckets.
+  cost_eur?: number | null;
 }
 
 // Response of GET /api/tokens/usage — the dashboard's "new" (llm_usage) token view.
@@ -857,6 +889,9 @@ export interface ModelTokenStat {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  // This model's spend on the task, priced from the LLM profile(s) that drove the calls;
+  // absent when none of those profiles carry a price.
+  cost_eur?: number | null;
 }
 
 export interface Session {
@@ -1014,6 +1049,7 @@ export interface Settings {
   notify_enabled?: boolean; // master push switch, on by default; one-click kill switch for maintenance windows
   notify_public_base_url?: string; // external base URL for vulnerability detail links; empty = messages carry no link
   notify_digest_interval_min?: number; // digest mode period (minutes), default 30
+  notify_task_complete?: boolean; // task-completion alerts, off by default; a lifecycle heads-up sent to every enabled channel when a task ends
   // Render limits of IM messages; 0 = no truncation. The backend answers 400 outside the bounds.
   notify_summary_max_runes?: number; // summary characters per finding, 0-4000, default 120
   notify_assets_max_shown?: number; // asset names listed per finding, 0-50, default 3

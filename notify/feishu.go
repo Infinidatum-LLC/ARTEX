@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -150,6 +151,28 @@ func feishuCard(m Message) (map[string]any, int) {
 	}
 	elements := []any{}
 	kept := 0
+	if m.hasNotice() {
+		// A notice is a finding-free informational message. The header already
+		// carries the title; the body is one lark_md div with the notice lines,
+		// each single-lined and escaped, plus an optional backlink button.
+		var sb strings.Builder
+		for _, line := range m.Notice.Lines {
+			if s := markdownText(line, 0); s != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(s)
+			}
+		}
+		if sb.Len() > 0 {
+			elements = append(elements, feishuMarkdownDiv(TruncateBytes(sb.String(), budget)))
+		}
+		if m.Notice.URL != "" {
+			elements = append(elements, feishuButton("View on the platform", m.Notice.URL))
+		}
+		card["elements"] = elements
+		return card, 1
+	}
 	if m.Batch {
 		// digest assembles the elements of a digest card around the lines of its
 		// first n items. The intro must state "the remaining N items will continue

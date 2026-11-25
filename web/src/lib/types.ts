@@ -61,6 +61,15 @@ export interface TaskTemplate {
   updated_at: string;
 }
 
+// PentestPreset is a built-in, code-defined pentest template (not editable, always
+// available). The "Pentest a website" flow expands one of these from a target URL.
+export interface PentestPreset {
+  key: string;
+  label: string;
+  summary: string;
+  default: boolean;
+}
+
 export interface DeleteTaskOptions {
   delete_assets: boolean;
   delete_traffic: boolean;
@@ -1445,7 +1454,6 @@ export type TaskCredential = TaskCredentialInput & {
   created_at: string;
   updated_at: string;
 };
-
 
 export interface AssetInterceptRule {
   id: number;

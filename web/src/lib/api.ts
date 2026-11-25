@@ -16,8 +16,6 @@ import type {
   Asset,
   AssetInterceptRule,
   AssetInterceptRuleInput,
-  TaskCredential,
-  TaskCredentialInput,
   Audit,
   BatchCategoryItem,
   BatchControlItem,
@@ -71,6 +69,7 @@ import type {
   NotificationDelivery,
   NotificationFilter,
   NotificationMeta,
+  PentestPreset,
   PromptVar,
   PromptVersion,
   ScanSchedule,
@@ -90,6 +89,8 @@ import type {
   TaskAssetScopeMutation,
   TaskCategory,
   TaskConstraint,
+  TaskCredential,
+  TaskCredentialInput,
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
@@ -302,6 +303,17 @@ export const api = {
       coverage_enabled: input.coverageEnabled ?? true, // on by default; false disables the asset coverage feature
       intercept_rules: input.interceptRules ?? [], // task-level asset interception rules
       credentials: input.credentials ?? [], // test accounts declared at creation; an empty password = the agent generates and records it (#3)
+    }),
+  // pentestPresets lists the built-in pentest templates for the "Pentest a website" picker.
+  pentestPresets: () => get<{ presets: PentestPreset[]; default: string }>("/tasks/pentest/presets"),
+  // pentestWebsite is the one-URL entry point: the backend expands the chosen preset
+  // (default when omitted) into a full task and creates it. Returns the created task.
+  pentestWebsite: (input: { url: string; preset?: string; name?: string; credentials?: TaskCredentialInput[] }) =>
+    post<Task>("/tasks/pentest", {
+      url: input.url,
+      preset: input.preset ?? "",
+      name: input.name ?? "",
+      credentials: input.credentials ?? [],
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
@@ -891,8 +903,7 @@ export const api = {
   // Channels are multi-instance resources (several bots of the same kind, each with its own
   // filter rules), so they form their own group instead of the flat settings key/value store.
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
-  notifyChannels: () =>
-    get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
+  notifyChannels: () => get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
     name: string;
     kind: string;
@@ -1139,11 +1150,9 @@ export const api = {
     patch<{ ok: boolean }>(`/triggers/${id}`, t),
   deleteTrigger: (id: number) => del<{ deleted: number }>(`/triggers/${id}`),
   // Recurring scan schedules (automation)
-  scanSchedules: () =>
-    get<{ schedules: ScanSchedule[] }>(`/scan-schedules`).then((r) => arr(r.schedules)),
+  scanSchedules: () => get<{ schedules: ScanSchedule[] }>(`/scan-schedules`).then((r) => arr(r.schedules)),
   createScanSchedule: (s: ScanScheduleInput) => post<ScanSchedule>(`/scan-schedules`, s),
-  updateScanSchedule: (id: number, s: ScanScheduleInput) =>
-    patch<{ ok: boolean }>(`/scan-schedules/${id}`, s),
+  updateScanSchedule: (id: number, s: ScanScheduleInput) => patch<{ ok: boolean }>(`/scan-schedules/${id}`, s),
   deleteScanSchedule: (id: number) => del<{ deleted: number }>(`/scan-schedules/${id}`),
   runScanSchedule: (id: number) => post<{ task_id: string }>(`/scan-schedules/${id}/run`, {}),
   saveAgentConfig: (
@@ -1183,8 +1192,12 @@ export const api = {
     t: Pick<Tool, "description" | "schema" | "agents" | "enabled" | "kind" | "exec" | "deferred">,
   ) => put<{ ok: boolean }>(`/tools/custom/${key}`, t),
   deleteCustomTool: (key: string) => del<{ deleted: string }>(`/tools/custom/${key}`),
-  testCustomTool: (body: { key?: string; kind: string; exec: Record<string, unknown>; params: Record<string, unknown> }) =>
-    post<{ output: string; is_error: boolean }>("/tools/custom/test", body),
+  testCustomTool: (body: {
+    key?: string;
+    kind: string;
+    exec: Record<string, unknown>;
+    params: Record<string, unknown>;
+  }) => post<{ output: string; is_error: boolean }>("/tools/custom/test", body),
   detectPython: () => post<{ python_interpreter: string }>("/settings/python/detect", {}),
 
   // ---- mcp ----

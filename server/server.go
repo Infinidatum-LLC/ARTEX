@@ -732,6 +732,9 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
+	// Simplification layer: give a website, run a pentest from a built-in preset.
+	mux.HandleFunc("GET /api/tasks/pentest/presets", s.listPentestPresets)
+	mux.HandleFunc("POST /api/tasks/pentest", s.pentestWebsite)
 	mux.HandleFunc("GET /api/skill-gaps", s.skillGaps)
 	mux.HandleFunc("GET /api/task-categories", s.pgListTaskCategories)
 	mux.HandleFunc("POST /api/task-categories", s.pgCreateTaskCategory)
@@ -1690,6 +1693,14 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
 	}
+	s.createTaskFromReq(w, req)
+}
+
+// createTaskFromReq runs the shared task-creation path (validation, creation,
+// credentials, launch, response) on an already-decoded request. createTask decodes
+// an HTTP body into it; the pentest endpoint builds the request from a preset so
+// both paths create tasks identically.
+func (s *Server) createTaskFromReq(w http.ResponseWriter, req createTaskReq) {
 	if strings.TrimSpace(req.Description) == "" {
 		req.Description = "Unnamed task"
 	}
